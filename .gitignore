@@ -1,0 +1,90 @@
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+
+# ── Virtual Environments ───────────────────────────────────────────────────────
+.venv/
+venv/
+ENV/
+env/
+.env
+
+# ── Environment Variables & Secrets ───────────────────────────────────────────
+.env
+.env.*
+!.env.example
+secrets/
+*.key
+*.pem
+credentials.json
+
+# ── Jupyter Notebooks ─────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+
+# ── dbt ───────────────────────────────────────────────────────────────────────
+src/transformation/dbt/target/
+src/transformation/dbt/dbt_packages/
+src/transformation/dbt/logs/
+src/transformation/dbt/.user.yml
+
+# ── Apache Airflow ────────────────────────────────────────────────────────────
+airflow.db
+airflow.cfg
+airflow-webserver.pid
+logs/
+standalone_admin_password.txt
+
+# ── Apache Spark ──────────────────────────────────────────────────────────────
+spark-warehouse/
+derby.log
+metastore_db/
+
+# ── Data Files (never commit raw data) ───────────────────────────────────────
+data/
+*.csv
+*.json
+*.parquet
+*.avro
+*.orc
+!tests/fixtures/*.csv
+!tests/fixtures/*.json
+
+# ── Great Expectations ────────────────────────────────────────────────────────
+quality/expectations/uncommitted/
+
+# ── Docker ────────────────────────────────────────────────────────────────────
+docker/volumes/
+.docker/
+
+# ── IDEs ──────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+*.log
+pipeline_logs/
+
+# ── Terraform (future) ────────────────────────────────────────────────────────
+*.tfstate
+*.tfstate.backup
+.terraform/

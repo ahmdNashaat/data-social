@@ -1,0 +1,431 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# Social Media Analytics Platform — Docker Compose
+# ══════════════════════════════════════════════════════════════════════════════
+# Services:
+#   Infrastructure : zookeeper, kafka, kafka-ui, minio, minio-init
+#   Processing     : spark-master, spark-worker-1, spark-worker-2
+#   Orchestration  : postgres, redis, airflow-init, airflow-webserver, airflow-scheduler
+#
+# Usage:
+#   make up           → start everything
+#   make down         → stop everything
+#   make logs         → tail all logs
+# ══════════════════════════════════════════════════════════════════════════════
+
+x-airflow-common: &airflow-common
+  image: apache/airflow:2.8.1-python3.11
+  environment: &airflow-env
+    AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+    AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://airflow:airflow@postgres/airflow
+    AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
+    AIRFLOW__CORE__FERNET_KEY: "46BKJoQYlPPOexq0OhDZnIlNepKFf87WFwLt0nfd4ro="
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__API__AUTH_BACKENDS: "airflow.api.auth.backend.basic_auth"
+    AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
+    AIRFLOW__CORE__DEFAULT_TIMEZONE: UTC
+    # Connections
+    AIRFLOW_CONN_SPARK_DEFAULT: "spark://spark-master:7077"
+    AIRFLOW_CONN_MINIO_DEFAULT: "aws://minioadmin:minioadmin@?endpoint_url=http%3A%2F%2Fminio%3A9000&region_name=us-east-1"
+    AIRFLOW_CONN_POSTGRES_DEFAULT: "postgresql://airflow:airflow@postgres/airflow"
+    # Spark submit config
+    SPARK_HOME: /opt/spark
+    PYTHONPATH: /opt/airflow/src
+  volumes:
+    - ../src/orchestration/dags:/opt/airflow/dags
+    - ../src:/opt/airflow/src
+    - ../logs/airflow:/opt/airflow/logs
+    - ../quality:/opt/airflow/quality
+  depends_on: &airflow-depends
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  networks:
+    - platform-net
+
+# ── Spark common config ───────────────────────────────────────────────────────
+x-spark-common: &spark-common
+  image: bitnami/spark:3.5.0
+  environment: &spark-env
+    SPARK_MODE: worker
+    SPARK_MASTER_URL: spark://spark-master:7077
+    SPARK_WORKER_MEMORY: 2G
+    SPARK_WORKER_CORES: 2
+    SPARK_RPC_AUTHENTICATION_ENABLED: "no"
+    SPARK_RPC_ENCRYPTION_ENABLED: "no"
+    SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED: "no"
+    SPARK_SSL_ENABLED: "no"
+    # MinIO / S3 config for Spark
+    AWS_ACCESS_KEY_ID: minioadmin
+    AWS_SECRET_ACCESS_KEY: minioadmin
+    SPARK_CONF_spark.hadoop.fs.s3a.endpoint: http://minio:9000
+    SPARK_CONF_spark.hadoop.fs.s3a.path.style.access: "true"
+    SPARK_CONF_spark.hadoop.fs.s3a.impl: org.apache.hadoop.fs.s3a.S3AFileSystem
+    SPARK_CONF_spark.hadoop.fs.s3a.aws.credentials.provider: org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider
+  volumes:
+    - ../src:/opt/src
+    - spark-logs:/opt/bitnami/spark/logs
+  networks:
+    - platform-net
+
+# ══════════════════════════════════════════════════════════════════════════════
+services:
+
+  # ── ZOOKEEPER (Kafka dependency) ────────────────────────────────────────────
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.3
+    container_name: sma-zookeeper
+    hostname: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+      ZOOKEEPER_SYNC_LIMIT: 2
+    volumes:
+      - zookeeper-data:/var/lib/zookeeper/data
+      - zookeeper-log:/var/lib/zookeeper/log
+    healthcheck:
+      test: ["CMD-SHELL", "echo ruok | nc localhost 2181 | grep imok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - platform-net
+    restart: unless-stopped
+
+  # ── KAFKA ───────────────────────────────────────────────────────────────────
+  kafka:
+    image: confluentinc/cp-kafka:7.5.3
+    container_name: sma-kafka
+    hostname: kafka
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9092:9092"       # Internal broker
+      - "29092:29092"     # External access from host machine
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_RETENTION_HOURS: 168       # 7 days
+      KAFKA_LOG_SEGMENT_BYTES: 1073741824  # 1GB
+      KAFKA_NUM_PARTITIONS: 3
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:9092 --list"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    networks:
+      - platform-net
+    restart: unless-stopped
+
+  # ── KAFKA TOPICS INIT ───────────────────────────────────────────────────────
+  kafka-init:
+    image: confluentinc/cp-kafka:7.5.3
+    container_name: sma-kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command: |
+      "
+      echo 'Creating Kafka topics...'
+
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists \
+        --topic social.tweets \
+        --replication-factor 1 \
+        --partitions 3 \
+        --config retention.ms=604800000 \
+        --config cleanup.policy=delete
+
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists \
+        --topic social.engagements \
+        --replication-factor 1 \
+        --partitions 3 \
+        --config retention.ms=604800000
+
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists \
+        --topic social.youtube \
+        --replication-factor 1 \
+        --partitions 2 \
+        --config retention.ms=604800000
+
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists \
+        --topic social.reddit \
+        --replication-factor 1 \
+        --partitions 2 \
+        --config retention.ms=604800000
+
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists \
+        --topic social.events.dlq \
+        --replication-factor 1 \
+        --partitions 1 \
+        --config retention.ms=2592000000
+
+      echo 'Topics created successfully!'
+      kafka-topics --bootstrap-server kafka:9092 --list
+      "
+    networks:
+      - platform-net
+
+  # ── KAFKA UI (Monitoring) ───────────────────────────────────────────────────
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: sma-kafka-ui
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8082:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local-cluster
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+      DYNAMIC_CONFIG_ENABLED: "true"
+    networks:
+      - platform-net
+    restart: unless-stopped
+
+  # ── MINIO (S3-Compatible Object Storage) ───────────────────────────────────
+  minio:
+    image: minio/minio:latest
+    container_name: sma-minio
+    hostname: minio
+    ports:
+      - "9000:9000"   # API
+      - "9001:9001"   # Web Console
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_SITE_NAME: social-media-analytics
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - platform-net
+    restart: unless-stopped
+
+  # ── MINIO BUCKETS INIT ──────────────────────────────────────────────────────
+  minio-init:
+    image: minio/mc:latest
+    container_name: sma-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command: |
+      "
+      echo 'Configuring MinIO...'
+      mc alias set local http://minio:9000 minioadmin minioadmin
+
+      echo 'Creating buckets...'
+      mc mb --ignore-existing local/bronze
+      mc mb --ignore-existing local/silver
+      mc mb --ignore-existing local/gold
+      mc mb --ignore-existing local/landing-zone
+      mc mb --ignore-existing local/quality-reports
+
+      echo 'Setting bucket policies...'
+      mc anonymous set download local/quality-reports
+
+      echo 'MinIO setup complete!'
+      mc ls local/
+      "
+    networks:
+      - platform-net
+
+  # ── SPARK MASTER ────────────────────────────────────────────────────────────
+  spark-master:
+    image: bitnami/spark:3.5.0
+    container_name: sma-spark-master
+    hostname: spark-master
+    environment:
+      SPARK_MODE: master
+      SPARK_RPC_AUTHENTICATION_ENABLED: "no"
+      SPARK_RPC_ENCRYPTION_ENABLED: "no"
+      SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED: "no"
+      SPARK_SSL_ENABLED: "no"
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+    ports:
+      - "8080:8080"   # Spark Master UI
+      - "7077:7077"   # Spark Master port
+      - "4040:4040"   # Spark Application UI
+    volumes:
+      - ../src:/opt/src
+      - spark-logs:/opt/bitnami/spark/logs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+    networks:
+      - platform-net
+    restart: unless-stopped
+
+  # ── SPARK WORKERS ────────────────────────────────────────────────────────────
+  spark-worker-1:
+    <<: *spark-common
+    container_name: sma-spark-worker-1
+    hostname: spark-worker-1
+    depends_on:
+      spark-master:
+        condition: service_healthy
+    restart: unless-stopped
+
+  spark-worker-2:
+    <<: *spark-common
+    container_name: sma-spark-worker-2
+    hostname: spark-worker-2
+    depends_on:
+      spark-master:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── POSTGRES (Airflow metadata DB) ──────────────────────────────────────────
+  postgres:
+    image: postgres:15-alpine
+    container_name: sma-postgres
+    hostname: postgres
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - platform-net
+    restart: unless-stopped
+
+  # ── REDIS (Airflow Celery broker) ───────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: sma-redis
+    hostname: redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - platform-net
+    restart: unless-stopped
+
+  # ── AIRFLOW INIT (one-time DB migration + admin user) ───────────────────────
+  airflow-init:
+    <<: *airflow-common
+    container_name: sma-airflow-init
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        airflow db migrate
+        airflow users create \
+          --username admin \
+          --firstname Admin \
+          --lastname User \
+          --role Admin \
+          --email admin@example.com \
+          --password admin
+        airflow connections add 'spark_default' \
+          --conn-type 'spark' \
+          --conn-host 'spark://spark-master' \
+          --conn-port 7077 || true
+        echo "Airflow initialized successfully!"
+    depends_on:
+      <<: *airflow-depends
+
+  # ── AIRFLOW WEBSERVER ────────────────────────────────────────────────────────
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: sma-airflow-webserver
+    command: webserver
+    ports:
+      - "8090:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      <<: *airflow-depends
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # ── AIRFLOW SCHEDULER ────────────────────────────────────────────────────────
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: sma-airflow-scheduler
+    command: scheduler
+    healthcheck:
+      test: ["CMD-SHELL", "airflow jobs check --job-type SchedulerJob --hostname $(hostname)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      <<: *airflow-depends
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # ── AIRFLOW CELERY WORKER ────────────────────────────────────────────────────
+  airflow-worker:
+    <<: *airflow-common
+    container_name: sma-airflow-worker
+    command: celery worker
+    environment:
+      <<: *airflow-env
+      DUMB_INIT_SETSID: "0"
+    depends_on:
+      <<: *airflow-depends
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+# ══════════════════════════════════════════════════════════════════════════════
+volumes:
+  zookeeper-data:
+    name: sma-zookeeper-data
+  zookeeper-log:
+    name: sma-zookeeper-log
+  kafka-data:
+    name: sma-kafka-data
+  minio-data:
+    name: sma-minio-data
+  postgres-data:
+    name: sma-postgres-data
+  spark-logs:
+    name: sma-spark-logs
+
+networks:
+  platform-net:
+    name: sma-network
+    driver: bridge

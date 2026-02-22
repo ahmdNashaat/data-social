@@ -1,0 +1,56 @@
+name: social_media_analytics
+version: "1.0.0"
+config-version: 2
+
+profile: social_media_analytics
+
+model-paths:   ["models"]
+test-paths:    ["tests"]
+seed-paths:    ["seeds"]
+macro-paths:   ["macros"]
+target-path:   "target"
+clean-targets: ["target", "dbt_packages"]
+
+# ── Model materializations by layer ──────────────────────────────────────────
+models:
+  social_media_analytics:
+
+    # Staging — views, no persistence cost, 1:1 source mapping
+    staging:
+      +materialized: view
+      +schema: staging
+      +tags: ["staging"]
+
+    # Intermediate — ephemeral (compiled into downstream models, no storage)
+    intermediate:
+      +materialized: ephemeral
+      +tags: ["intermediate"]
+
+    # Marts — tables, materialized for query performance
+    marts:
+      +materialized: table
+      +tags: ["marts"]
+
+      facts:
+        +schema: marts
+        +tags: ["facts"]
+
+      dimensions:
+        +schema: marts
+        +tags: ["dimensions"]
+
+# ── Seeds ────────────────────────────────────────────────────────────────────
+seeds:
+  social_media_analytics:
+    +schema: seeds
+
+# ── Snapshots ────────────────────────────────────────────────────────────────
+snapshots:
+  social_media_analytics:
+    +target_schema: snapshots
+
+# ── Variables ─────────────────────────────────────────────────────────────────
+vars:
+  silver_database: "silver"
+  gold_database:   "gold"
+  start_date:      "2024-01-01"

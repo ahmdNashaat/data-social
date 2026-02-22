@@ -1,0 +1,87 @@
+config_version: 3.0
+
+datasources:
+  # ── Bronze layer — NDJSON files in MinIO ────────────────────────────────────
+  bronze_minio:
+    class_name: Datasource
+    execution_engine:
+      class_name: PandasExecutionEngine
+    data_connectors:
+      bronze_connector:
+        class_name: InferredAssetS3DataConnector
+        bucket: bronze
+        boto3_options:
+          endpoint_url: "http://minio:9000"
+          aws_access_key_id: minioadmin
+          aws_secret_access_key: minioadmin
+          region_name: us-east-1
+        default_regex:
+          pattern: "(twitter|youtube|reddit)/(\\w+)/year=(\\d{4})/month=(\\d{2})/day=(\\d{2})/hour=(\\d{2})/(.+)\\.json"
+          group_names: ["source", "entity", "year", "month", "day", "hour", "filename"]
+        reader_options:
+          lines: true    # NDJSON — one JSON object per line
+
+  # ── Silver layer — Parquet files in MinIO ────────────────────────────────────
+  silver_minio:
+    class_name: Datasource
+    execution_engine:
+      class_name: PandasExecutionEngine
+    data_connectors:
+      silver_connector:
+        class_name: InferredAssetS3DataConnector
+        bucket: silver
+        boto3_options:
+          endpoint_url: "http://minio:9000"
+          aws_access_key_id: minioadmin
+          aws_secret_access_key: minioadmin
+          region_name: us-east-1
+        default_regex:
+          pattern: "(\\w+)/year=(\\d{4})/month=(\\d{2})/day=(\\d{2})/(.+)\\.parquet"
+          group_names: ["entity", "year", "month", "day", "filename"]
+
+  # ── Gold layer — DuckDB in-process ───────────────────────────────────────────
+  gold_duckdb:
+    class_name: Datasource
+    execution_engine:
+      class_name: SqlAlchemyExecutionEngine
+      connection_string: "duckdb:////tmp/social_media_analytics.duckdb"
+    data_connectors:
+      gold_connector:
+        class_name: InferredAssetSqlDataConnector
+        name: gold_connector
+
+stores:
+  expectations_store:
+    class_name: ExpectationsStore
+    store_backend:
+      class_name: TupleFilesystemStoreBackend
+      base_directory: expectations/
+
+  validations_store:
+    class_name: ValidationsStore
+    store_backend:
+      class_name: TupleFilesystemStoreBackend
+      base_directory: uncommitted/validations/
+
+  evaluation_parameter_store:
+    class_name: EvaluationParameterStore
+
+  checkpoint_store:
+    class_name: CheckpointStore
+    store_backend:
+      class_name: TupleFilesystemStoreBackend
+      base_directory: checkpoints/
+
+expectations_store_name:     expectations_store
+validations_store_name:      validations_store
+evaluation_parameter_store_name: evaluation_parameter_store
+checkpoint_store_name:       checkpoint_store
+
+data_docs_sites:
+  local_site:
+    class_name: SiteBuilder
+    store_backend:
+      class_name: TupleFilesystemStoreBackend
+      base_directory: uncommitted/data_docs/local/
+    site_index_builder:
+      class_name: DefaultSiteIndexBuilder

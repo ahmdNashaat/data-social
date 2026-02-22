@@ -1,0 +1,87 @@
+version: 2
+
+sources:
+
+  - name: silver
+    description: >
+      Silver layer — cleaned and deduplicated data produced by PySpark
+      Bronze → Silver transformation jobs. Stored as Parquet files in MinIO,
+      read by DuckDB via the httpfs extension.
+    schema: silver
+    tags: ["silver", "source"]
+
+    tables:
+
+      - name: tweets
+        description: >
+          Cleaned Twitter/X tweet events. Deduplicated by tweet_id.
+          Timestamps normalized to UTC. Null primary keys rejected.
+        columns:
+          - name: tweet_id
+            description: Unique tweet identifier (UUID)
+            tests:
+              - not_null
+              - unique
+          - name: user_id
+            description: Author's user ID
+            tests:
+              - not_null
+          - name: platform
+            description: Always 'twitter' for this table
+            tests:
+              - not_null
+              - accepted_values:
+                  values: ["twitter"]
+          - name: created_at
+            description: UTC timestamp of tweet creation
+            tests:
+              - not_null
+          - name: likes_count
+            description: Number of likes at ingestion time
+            tests:
+              - not_null
+              - dbt_expectations.expect_column_values_to_be_between:
+                  min_value: 0
+          - name: silver_batch_id
+            description: Pipeline run ID that produced this record
+            tests:
+              - not_null
+
+      - name: engagements
+        description: >
+          Cleaned engagement events (likes, retweets, replies, quotes).
+          Deduplicated by engagement_id.
+        columns:
+          - name: engagement_id
+            tests: [not_null, unique]
+          - name: post_id
+            tests: [not_null]
+          - name: engaging_user_id
+            tests: [not_null]
+          - name: engagement_type
+            tests:
+              - not_null
+              - accepted_values:
+                  values: ["LIKE", "RETWEET", "REPLY", "QUOTE", "VIEW", "UNKNOWN"]
+          - name: engagement_value
+            tests:
+              - not_null
+              - dbt_expectations.expect_column_values_to_be_between:
+                  min_value: 0
+
+      - name: posts
+        description: >
+          Unified cross-platform posts table. One row per post across
+          Twitter, YouTube, and Reddit. Deduplicated by (post_id, platform).
+        columns:
+          - name: post_id
+            tests: [not_null]
+          - name: user_id
+            tests: [not_null]
+          - name: platform
+            tests:
+              - not_null
+              - accepted_values:
+                  values: ["twitter", "youtube", "reddit"]
+          - name: posted_at
+            tests: [not_null]

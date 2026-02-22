@@ -1,0 +1,130 @@
+version: 2
+
+models:
+
+  # ── Facts ───────────────────────────────────────────────────────────────────
+
+  - name: fact_engagements
+    description: >
+      One row per engagement event (like, retweet, reply, quote, view).
+      Primary fact table for engagement analytics.
+      Grain: one engagement event.
+    columns:
+      - name: engagement_sk
+        description: Surrogate key (MD5 hash of engagement_id)
+        tests: [not_null, unique]
+      - name: engagement_id
+        description: Natural key from source system
+        tests: [not_null, unique]
+      - name: post_id
+        description: ID of the post being engaged with
+        tests: [not_null]
+      - name: engaging_user_id
+        description: ID of the user performing the engagement
+        tests: [not_null]
+      - name: platform
+        description: Platform where engagement occurred
+        tests:
+          - not_null
+          - accepted_values:
+              values: ["twitter", "youtube", "reddit"]
+      - name: date_sk
+        description: Date surrogate key (YYYYMMDD integer)
+        tests: [not_null]
+      - name: engagement_type
+        description: Type of engagement
+        tests:
+          - not_null
+          - accepted_values:
+              values: ["LIKE", "RETWEET", "REPLY", "QUOTE", "VIEW", "UNKNOWN"]
+      - name: engagement_value
+        description: Weighted engagement score
+        tests:
+          - not_null
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: 0
+      - name: gold_loaded_at
+        description: Timestamp when record was loaded into Gold
+        tests: [not_null]
+
+  - name: fact_post_metrics
+    description: >
+      Daily performance snapshot per post.
+      Grain: one row per (post_id, platform, date).
+    columns:
+      - name: metric_sk
+        tests: [not_null, unique]
+      - name: post_id
+        tests: [not_null]
+      - name: platform
+        tests:
+          - not_null
+          - accepted_values:
+              values: ["twitter", "youtube", "reddit"]
+      - name: date_sk
+        tests: [not_null]
+      - name: engagement_rate_pct
+        tests:
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: 0
+              max_value: 100
+      - name: engagement_tier
+        tests:
+          - accepted_values:
+              values: ["viral", "high", "medium", "low"]
+
+  # ── Dimensions ───────────────────────────────────────────────────────────────
+
+  - name: dim_date
+    description: >
+      Calendar date dimension. Pre-populated for 2020–2030.
+      Surrogate key: YYYYMMDD integer.
+    columns:
+      - name: date_sk
+        description: Surrogate key (YYYYMMDD integer e.g. 20240115)
+        tests: [not_null, unique]
+      - name: full_date
+        description: Calendar date
+        tests: [not_null, unique]
+      - name: year
+        tests: [not_null]
+      - name: month
+        tests:
+          - not_null
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: 1
+              max_value: 12
+      - name: day_of_month
+        tests:
+          - not_null
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: 1
+              max_value: 31
+      - name: is_weekend
+        tests: [not_null]
+
+  - name: dim_posts
+    description: >
+      One row per unique post (tweet / video / Reddit post) across all platforms.
+      SCD Type 1 — overwrites on pipeline re-run.
+    columns:
+      - name: post_sk
+        tests: [not_null, unique]
+      - name: post_id
+        tests: [not_null]
+      - name: user_id
+        tests: [not_null]
+      - name: platform
+        tests:
+          - not_null
+          - accepted_values:
+              values: ["twitter", "youtube", "reddit"]
+      - name: engagement_tier
+        tests:
+          - accepted_values:
+              values: ["viral", "high", "medium", "low"]
+      - name: engagement_rate_pct
+        tests:
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: 0
+              max_value: 100

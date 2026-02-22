@@ -1,0 +1,55 @@
+name: Docker Validate
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "docker/**"
+      - ".github/workflows/docker_validate.yml"
+
+jobs:
+  docker-validate:
+    name: Docker Build + Smoke Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Validate docker-compose syntax
+        run: |
+          docker compose -f docker/docker-compose.yml config --quiet
+
+      - name: Build all Docker images
+        run: |
+          docker compose -f docker/docker-compose.yml build
+
+      - name: Start services (wait for healthy)
+        run: |
+          docker compose -f docker/docker-compose.yml up -d --wait
+        timeout-minutes: 10
+
+      - name: Smoke test — Airflow health
+        run: |
+          curl --fail --retry 5 --retry-delay 5 http://localhost:8090/health
+
+      - name: Smoke test — MinIO health
+        run: |
+          curl --fail --retry 5 --retry-delay 5 http://localhost:9000/minio/health/live
+
+      - name: Smoke test — Kafka broker reachable
+        run: |
+          docker compose -f docker/docker-compose.yml exec kafka \
+            kafka-topics.sh --bootstrap-server localhost:9092 --list
+
+      - name: Show container status on failure
+        if: failure()
+        run: |
+          docker compose -f docker/docker-compose.yml ps
+          docker compose -f docker/docker-compose.yml logs --tail=50
+
+      - name: Tear down
+        if: always()
+        run: |
+          docker compose -f docker/docker-compose.yml down -v

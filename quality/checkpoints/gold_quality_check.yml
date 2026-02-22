@@ -1,0 +1,25 @@
+# checkpoints/gold_quality_check.yml
+# ─────────────────────────────────────────────────────────────────────────────
+# Gold Quality Checkpoint
+# Severity: ALERT-ONLY — failures notify but pipeline continues
+# Triggered by: transformation_pipeline DAG after dbt run
+# ─────────────────────────────────────────────────────────────────────────────
+name: gold_quality_check
+config_version: 1.0
+class_name: SimpleCheckpoint
+run_name_template: "gold_%Y%m%d_%H%M%S"
+
+validations:
+  - batch_request:
+      datasource_name: gold_duckdb
+      data_connector_name: gold_connector
+      data_asset_name: fact_engagements
+    expectation_suite_name: gold.fact_engagements
+    action_list:
+      - name: store_validation_result
+        action:
+          class_name: StoreValidationResultAction
+      - name: update_data_docs
+        action:
+          class_name: UpdateDataDocsAction
+          site_names: [local_site]

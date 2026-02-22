@@ -1,0 +1,68 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  lint-and-test:
+    name: Lint + Unit Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dev dependencies
+        run: |
+          pip install -r requirements-dev.txt
+
+      - name: Run flake8 linter
+        run: |
+          flake8 src/ tests/ \
+            --max-line-length=120 \
+            --exclude=src/transformation/dbt/ \
+            --format='%(path)s:%(row)d:%(col)d: %(code)s %(text)s'
+
+      - name: Check code formatting (black)
+        run: |
+          black src/ tests/ --line-length=120 --check --diff \
+            --exclude src/transformation/dbt/
+
+      - name: Check import ordering (isort)
+        run: |
+          isort src/ tests/ --profile=black --line-length=120 --check-only \
+            --skip src/transformation/dbt/
+
+      - name: Run security scan (bandit)
+        run: |
+          bandit -r src/ --skip B101 -f json -o bandit-report.json || true
+          bandit -r src/ --skip B101
+
+      - name: Install project dependencies (lightweight subset)
+        run: |
+          pip install faker pydantic loguru tenacity click python-dotenv
+
+      - name: Run unit tests with coverage
+        run: |
+          pytest tests/unit/ \
+            -v \
+            --cov=src \
+            --cov-report=xml \
+            --cov-report=term-missing \
+            --cov-fail-under=80
+
+      - name: Upload coverage report
+        uses: codecov/codecov-action@v3
+        if: always()
+        with:
+          file: coverage.xml
+          fail_ci_if_error: false

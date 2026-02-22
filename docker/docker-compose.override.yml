@@ -1,0 +1,39 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# docker-compose.override.yml — Local Development Overrides
+# ══════════════════════════════════════════════════════════════════════════════
+# This file is automatically merged with docker-compose.yml by Docker Compose.
+# Contains settings for local development ONLY — not for production use.
+# ══════════════════════════════════════════════════════════════════════════════
+
+services:
+
+  # More verbose Kafka logging locally
+  kafka:
+    environment:
+      KAFKA_LOG4J_ROOT_LOGLEVEL: WARN
+      KAFKA_TOOLS_LOG4J_LOGLEVEL: WARN
+
+  # Mount source code live into Spark for faster iteration
+  spark-master:
+    volumes:
+      - ../src:/opt/src
+      - ../tests:/opt/tests
+
+  spark-worker-1:
+    volumes:
+      - ../src:/opt/src
+
+  spark-worker-2:
+    volumes:
+      - ../src:/opt/src
+
+  # Airflow with live DAG reloading
+  airflow-webserver:
+    environment:
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
+      AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL: 30
+      AIRFLOW__WEBSERVER__RELOAD_ON_PLUGIN_CHANGE: "true"
+
+  airflow-scheduler:
+    environment:
+      AIRFLOW__SCHEDULER__MIN_FILE_PROCESS_INTERVAL: 30
