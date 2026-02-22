@@ -1,22 +1,17 @@
 # checkpoints/bronze_quality_check.yml
-# ─────────────────────────────────────────────────────────────────────────────
-# Bronze Quality Checkpoint
-# Severity: NON-BLOCKING — logs failures, pipeline continues
-# Triggered by: ingestion_pipeline DAG after batch ingest
-# ─────────────────────────────────────────────────────────────────────────────
+# NON-BLOCKING — logs warnings, pipeline continues on failure.
+
 name: bronze_quality_check
 config_version: 1.0
 class_name: SimpleCheckpoint
-run_name_template: "bronze_%Y%m%d_%H%M%S"
+run_name_template: "%Y%m%d-%H%M%S-bronze"
 
 validations:
   - batch_request:
-      datasource_name: bronze_minio
+      datasource_name: bronze_datasource
       data_connector_name: bronze_connector
-      data_asset_name: twitter/tweets
-      data_connector_query:
-        index: -1    # Most recent batch
-    expectation_suite_name: bronze.twitter.tweets
+      data_asset_name: tweets
+    expectation_suite_name: bronze.tweets
     action_list:
       - name: store_validation_result
         action:
@@ -25,4 +20,17 @@ validations:
         action:
           class_name: UpdateDataDocsAction
           site_names: [local_site]
-      # Non-blocking: no SlackNotificationAction or raise_on_failed_expectations
+
+  - batch_request:
+      datasource_name: bronze_datasource
+      data_connector_name: bronze_connector
+      data_asset_name: engagements
+    expectation_suite_name: bronze.engagements
+    action_list:
+      - name: store_validation_result
+        action:
+          class_name: StoreValidationResultAction
+      - name: update_data_docs
+        action:
+          class_name: UpdateDataDocsAction
+          site_names: [local_site]

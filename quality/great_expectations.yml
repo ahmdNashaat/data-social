@@ -1,54 +1,38 @@
 config_version: 3.0
 
 datasources:
-  # ── Bronze layer — NDJSON files in MinIO ────────────────────────────────────
-  bronze_minio:
+  silver_datasource:
+    class_name: Datasource
+    execution_engine:
+      class_name: SqlAlchemyExecutionEngine
+      connection_string: "duckdb:////tmp/ge_validation.duckdb"
+      create_temp_table: false
+    data_connectors:
+      silver_connector:
+        class_name: ConfiguredAssetSqlDataConnector
+        assets:
+          silver_tweets:
+            schema_name: main
+            table_name: silver_tweets
+          silver_engagements:
+            schema_name: main
+            table_name: silver_engagements
+          silver_posts:
+            schema_name: main
+            table_name: silver_posts
+
+  bronze_datasource:
     class_name: Datasource
     execution_engine:
       class_name: PandasExecutionEngine
     data_connectors:
       bronze_connector:
-        class_name: InferredAssetS3DataConnector
-        bucket: bronze
-        boto3_options:
-          endpoint_url: "http://minio:9000"
-          aws_access_key_id: minioadmin
-          aws_secret_access_key: minioadmin
-          region_name: us-east-1
+        class_name: InferredAssetFilesystemDataConnector
+        base_directory: /tmp/bronze_sample/
         default_regex:
-          pattern: "(twitter|youtube|reddit)/(\\w+)/year=(\\d{4})/month=(\\d{2})/day=(\\d{2})/hour=(\\d{2})/(.+)\\.json"
-          group_names: ["source", "entity", "year", "month", "day", "hour", "filename"]
-        reader_options:
-          lines: true    # NDJSON — one JSON object per line
-
-  # ── Silver layer — Parquet files in MinIO ────────────────────────────────────
-  silver_minio:
-    class_name: Datasource
-    execution_engine:
-      class_name: PandasExecutionEngine
-    data_connectors:
-      silver_connector:
-        class_name: InferredAssetS3DataConnector
-        bucket: silver
-        boto3_options:
-          endpoint_url: "http://minio:9000"
-          aws_access_key_id: minioadmin
-          aws_secret_access_key: minioadmin
-          region_name: us-east-1
-        default_regex:
-          pattern: "(\\w+)/year=(\\d{4})/month=(\\d{2})/day=(\\d{2})/(.+)\\.parquet"
-          group_names: ["entity", "year", "month", "day", "filename"]
-
-  # ── Gold layer — DuckDB in-process ───────────────────────────────────────────
-  gold_duckdb:
-    class_name: Datasource
-    execution_engine:
-      class_name: SqlAlchemyExecutionEngine
-      connection_string: "duckdb:////tmp/social_media_analytics.duckdb"
-    data_connectors:
-      gold_connector:
-        class_name: InferredAssetSqlDataConnector
-        name: gold_connector
+          pattern: (.+)\.json
+          group_names:
+            - data_asset_name
 
 stores:
   expectations_store:
@@ -70,18 +54,23 @@ stores:
     class_name: CheckpointStore
     store_backend:
       class_name: TupleFilesystemStoreBackend
+      suppress_store_backend_id: true
       base_directory: checkpoints/
 
-expectations_store_name:     expectations_store
-validations_store_name:      validations_store
+expectations_store_name: expectations_store
+validations_store_name: validations_store
 evaluation_parameter_store_name: evaluation_parameter_store
-checkpoint_store_name:       checkpoint_store
+checkpoint_store_name: checkpoint_store
 
 data_docs_sites:
   local_site:
     class_name: SiteBuilder
+    show_how_to_buttons: false
     store_backend:
       class_name: TupleFilesystemStoreBackend
-      base_directory: uncommitted/data_docs/local/
+      base_directory: uncommitted/data_docs/local_site/
     site_index_builder:
       class_name: DefaultSiteIndexBuilder
+
+anonymous_usage_statistics:
+  enabled: false

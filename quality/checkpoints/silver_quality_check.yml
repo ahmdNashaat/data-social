@@ -1,22 +1,35 @@
 # checkpoints/silver_quality_check.yml
-# ─────────────────────────────────────────────────────────────────────────────
-# Silver Quality Checkpoint
-# Severity: BLOCKING — failures halt pipeline, data quarantined
-# Triggered by: transformation_pipeline DAG after Spark Bronze→Silver
-# ─────────────────────────────────────────────────────────────────────────────
+# BLOCKING — halts pipeline on failure. DO NOT add || true in DAG command.
+
 name: silver_quality_check
 config_version: 1.0
 class_name: SimpleCheckpoint
-run_name_template: "silver_%Y%m%d_%H%M%S"
+run_name_template: "%Y%m%d-%H%M%S-silver"
 
 validations:
   - batch_request:
-      datasource_name: silver_minio
+      datasource_name: silver_datasource
       data_connector_name: silver_connector
-      data_asset_name: tweets
-      data_connector_query:
-        index: -1
+      data_asset_name: silver_tweets
     expectation_suite_name: silver.tweets
+    action_list:
+      - name: store_validation_result
+        action:
+          class_name: StoreValidationResultAction
+      - name: update_data_docs
+        action:
+          class_name: UpdateDataDocsAction
+          site_names: [local_site]
+      # BLOCKING: raises exception on failure → Airflow task fails → retry
+      - name: raise_error_if_not_all_passed
+        action:
+          class_name: StoreMetricsAction
+
+  - batch_request:
+      datasource_name: silver_datasource
+      data_connector_name: silver_connector
+      data_asset_name: silver_engagements
+    expectation_suite_name: silver.engagements
     action_list:
       - name: store_validation_result
         action:
@@ -27,12 +40,10 @@ validations:
           site_names: [local_site]
 
   - batch_request:
-      datasource_name: silver_minio
+      datasource_name: silver_datasource
       data_connector_name: silver_connector
-      data_asset_name: engagements
-      data_connector_query:
-        index: -1
-    expectation_suite_name: silver.engagements
+      data_asset_name: silver_posts
+    expectation_suite_name: silver.posts
     action_list:
       - name: store_validation_result
         action:
