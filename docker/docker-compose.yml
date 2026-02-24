@@ -47,26 +47,24 @@ x-airflow-common: &airflow-common
 
 # ── Spark common config ───────────────────────────────────────────────────────
 x-spark-common: &spark-common
-  image: bitnami/spark:3.5.0
+  image: apache/spark:3.5.0
+  # Workers must explicitly invoke the Worker class via spark-class
+  command: >
+    /opt/spark/bin/spark-class
+    org.apache.spark.deploy.worker.Worker
+    spark://spark-master:7077
+  user: root
   environment: &spark-env
-    SPARK_MODE: worker
-    SPARK_MASTER_URL: spark://spark-master:7077
-    SPARK_WORKER_MEMORY: 2G
-    SPARK_WORKER_CORES: 2
-    SPARK_RPC_AUTHENTICATION_ENABLED: "no"
-    SPARK_RPC_ENCRYPTION_ENABLED: "no"
-    SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED: "no"
-    SPARK_SSL_ENABLED: "no"
+    SPARK_NO_DAEMONIZE: "true"
+    SPARK_WORKER_MEMORY: 2g
+    SPARK_WORKER_CORES: "2"
     # MinIO / S3 config for Spark
     AWS_ACCESS_KEY_ID: minioadmin
     AWS_SECRET_ACCESS_KEY: minioadmin
-    SPARK_CONF_spark.hadoop.fs.s3a.endpoint: http://minio:9000
-    SPARK_CONF_spark.hadoop.fs.s3a.path.style.access: "true"
-    SPARK_CONF_spark.hadoop.fs.s3a.impl: org.apache.hadoop.fs.s3a.S3AFileSystem
-    SPARK_CONF_spark.hadoop.fs.s3a.aws.credentials.provider: org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider
+    SPARK_CONF_DIR: /opt/spark/conf
   volumes:
     - ../src:/opt/src
-    - spark-logs:/opt/bitnami/spark/logs
+    - spark-logs:/opt/spark/logs
   networks:
     - platform-net
 
@@ -86,10 +84,11 @@ services:
       - zookeeper-data:/var/lib/zookeeper/data
       - zookeeper-log:/var/lib/zookeeper/log
     healthcheck:
-      test: ["CMD-SHELL", "echo ruok | nc localhost 2181 | grep imok"]
+      test: ["CMD", "bash", "-c", "echo ruok | timeout 2 nc -w 2 localhost 2181 | grep -q imok"]
       interval: 10s
-      timeout: 5s
-      retries: 5
+      timeout: 10s
+      retries: 10
+      start_period: 30s
     networks:
       - platform-net
     restart: unless-stopped
@@ -252,15 +251,16 @@ services:
 
   # ── SPARK MASTER ────────────────────────────────────────────────────────────
   spark-master:
-    image: bitnami/spark:3.5.0
+    image: apache/spark:3.5.0
     container_name: sma-spark-master
     hostname: spark-master
+    # The apache/spark image does NOT auto-start; must invoke Master class explicitly
+    command: >
+      /opt/spark/bin/spark-class
+      org.apache.spark.deploy.master.Master
+    user: root
     environment:
-      SPARK_MODE: master
-      SPARK_RPC_AUTHENTICATION_ENABLED: "no"
-      SPARK_RPC_ENCRYPTION_ENABLED: "no"
-      SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED: "no"
-      SPARK_SSL_ENABLED: "no"
+      SPARK_NO_DAEMONIZE: "true"
       AWS_ACCESS_KEY_ID: minioadmin
       AWS_SECRET_ACCESS_KEY: minioadmin
     ports:
@@ -269,12 +269,13 @@ services:
       - "4040:4040"   # Spark Application UI
     volumes:
       - ../src:/opt/src
-      - spark-logs:/opt/bitnami/spark/logs
+      - spark-logs:/opt/spark/logs
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080 || exit 1"]
       interval: 15s
       timeout: 10s
-      retries: 5
+      retries: 10
+      start_period: 30s
     networks:
       - platform-net
     restart: unless-stopped
